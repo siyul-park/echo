@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// SPDX-FileCopyrightText: © 2015 LabStack LLC and Echo contributors
+
 package middleware
 
 import (
@@ -29,6 +32,18 @@ func TestCORS(t *testing.T) {
 			notExpectHeaders: map[string]string{echo.HeaderAccessControlAllowOrigin: ""},
 		},
 		{
+			name: "ok, invalid pattern is ignored",
+			givenMW: CORSWithConfig(CORSConfig{
+				AllowOrigins: []string{
+					"\xff", // Invalid UTF-8 makes regexp.Compile to error
+					"*.example.com",
+				},
+			}),
+			whenMethod:    http.MethodOptions,
+			whenHeaders:   map[string]string{echo.HeaderOrigin: "http://aaa.example.com"},
+			expectHeaders: map[string]string{echo.HeaderAccessControlAllowOrigin: "http://aaa.example.com"},
+		},
+		{
 			name: "ok, specific AllowOrigins and AllowCredentials",
 			givenMW: CORSWithConfig(CORSConfig{
 				AllowOrigins:     []string{"localhost"},
@@ -54,6 +69,59 @@ func TestCORS(t *testing.T) {
 				echo.HeaderContentType: echo.MIMEApplicationJSON,
 			},
 			expectHeaders: map[string]string{
+				echo.HeaderAccessControlAllowOrigin:      "localhost",
+				echo.HeaderAccessControlAllowMethods:     "GET,HEAD,PUT,PATCH,POST,DELETE",
+				echo.HeaderAccessControlAllowCredentials: "true",
+				echo.HeaderAccessControlMaxAge:           "3600",
+			},
+		},
+		{
+			name: "ok, preflight request when `Access-Control-Max-Age` is set",
+			givenMW: CORSWithConfig(CORSConfig{
+				AllowOrigins:     []string{"localhost"},
+				AllowCredentials: true,
+				MaxAge:           1,
+			}),
+			whenMethod: http.MethodOptions,
+			whenHeaders: map[string]string{
+				echo.HeaderOrigin:      "localhost",
+				echo.HeaderContentType: echo.MIMEApplicationJSON,
+			},
+			expectHeaders: map[string]string{
+				echo.HeaderAccessControlMaxAge: "1",
+			},
+		},
+		{
+			name: "ok, preflight request when `Access-Control-Max-Age` is set to 0 - not to cache response",
+			givenMW: CORSWithConfig(CORSConfig{
+				AllowOrigins:     []string{"localhost"},
+				AllowCredentials: true,
+				MaxAge:           -1, // forces `Access-Control-Max-Age: 0`
+			}),
+			whenMethod: http.MethodOptions,
+			whenHeaders: map[string]string{
+				echo.HeaderOrigin:      "localhost",
+				echo.HeaderContentType: echo.MIMEApplicationJSON,
+			},
+			expectHeaders: map[string]string{
+				echo.HeaderAccessControlMaxAge: "0",
+			},
+		},
+		{
+			name: "ok, CORS check are skipped",
+			givenMW: CORSWithConfig(CORSConfig{
+				AllowOrigins:     []string{"localhost"},
+				AllowCredentials: true,
+				Skipper: func(c echo.Context) bool {
+					return true
+				},
+			}),
+			whenMethod: http.MethodOptions,
+			whenHeaders: map[string]string{
+				echo.HeaderOrigin:      "localhost",
+				echo.HeaderContentType: echo.MIMEApplicationJSON,
+			},
+			notExpectHeaders: map[string]string{
 				echo.HeaderAccessControlAllowOrigin:      "localhost",
 				echo.HeaderAccessControlAllowMethods:     "GET,HEAD,PUT,PATCH,POST,DELETE",
 				echo.HeaderAccessControlAllowCredentials: "true",
@@ -457,7 +525,7 @@ func TestCorsHeaders(t *testing.T) {
 			allowedOrigin: "http://example.com",
 			method:        http.MethodGet,
 			expected:      false,
-			expectStatus:  http.StatusOK,
+			expectStatus:  http.StatusUnauthorized,
 		},
 		{
 			name:          "non-preflight request, allow specific origin, matching origin header = CORS logic done",

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// SPDX-FileCopyrightText: © 2015 LabStack LLC and Echo contributors
+
 package middleware
 
 import (
@@ -13,54 +16,50 @@ import (
 	"github.com/labstack/echo/v4"
 )
 
-type (
-	// GzipConfig defines the config for Gzip middleware.
-	GzipConfig struct {
-		// Skipper defines a function to skip middleware.
-		Skipper Skipper
+// GzipConfig defines the config for Gzip middleware.
+type GzipConfig struct {
+	// Skipper defines a function to skip middleware.
+	Skipper Skipper
 
-		// Gzip compression level.
-		// Optional. Default value -1.
-		Level int `yaml:"level"`
+	// Gzip compression level.
+	// Optional. Default value -1.
+	Level int `yaml:"level"`
 
-		// Length threshold before gzip compression is applied.
-		// Optional. Default value 0.
-		//
-		// Most of the time you will not need to change the default. Compressing
-		// a short response might increase the transmitted data because of the
-		// gzip format overhead. Compressing the response will also consume CPU
-		// and time on the server and the client (for decompressing). Depending on
-		// your use case such a threshold might be useful.
-		//
-		// See also:
-		// https://webmasters.stackexchange.com/questions/31750/what-is-recommended-minimum-object-size-for-gzip-performance-benefits
-		MinLength int
-	}
+	// Length threshold before gzip compression is applied.
+	// Optional. Default value 0.
+	//
+	// Most of the time you will not need to change the default. Compressing
+	// a short response might increase the transmitted data because of the
+	// gzip format overhead. Compressing the response will also consume CPU
+	// and time on the server and the client (for decompressing). Depending on
+	// your use case such a threshold might be useful.
+	//
+	// See also:
+	// https://webmasters.stackexchange.com/questions/31750/what-is-recommended-minimum-object-size-for-gzip-performance-benefits
+	MinLength int
+}
 
-	gzipResponseWriter struct {
-		io.Writer
-		http.ResponseWriter
-		wroteHeader       bool
-		wroteBody         bool
-		minLength         int
-		minLengthExceeded bool
-		buffer            *bytes.Buffer
-		code              int
-	}
-)
+type gzipResponseWriter struct {
+	io.Writer
+	http.ResponseWriter
+	wroteHeader       bool
+	wroteBody         bool
+	minLength         int
+	minLengthExceeded bool
+	buffer            *bytes.Buffer
+	code              int
+}
 
 const (
 	gzipScheme = "gzip"
 )
 
-var (
-	// DefaultGzipConfig is the default Gzip middleware config.
-	DefaultGzipConfig = GzipConfig{
-		Skipper:   DefaultSkipper,
-		Level:     -1,
-		MinLength: 0,
-	}
-)
+// DefaultGzipConfig is the default Gzip middleware config.
+var DefaultGzipConfig = GzipConfig{
+	Skipper:   DefaultSkipper,
+	Level:     -1,
+	MinLength: 0,
+}
 
 // Gzip returns a middleware which compresses HTTP response using gzip compression
 // scheme.
@@ -107,9 +106,15 @@ func GzipWithConfig(config GzipConfig) echo.MiddlewareFunc {
 
 				grw := &gzipResponseWriter{Writer: w, ResponseWriter: rw, minLength: config.MinLength, buffer: buf}
 				defer func() {
+					// There are different reasons for cases when we have not yet written response to the client and now need to do so.
+					// a) handler response had only response code and no response body (ala 404 or redirects etc). Response code need to be written now.
+					// b) body is shorter than our minimum length threshold and being buffered currently and needs to be written
 					if !grw.wroteBody {
 						if res.Header().Get(echo.HeaderContentEncoding) == gzipScheme {
 							res.Header().Del(echo.HeaderContentEncoding)
+						}
+						if grw.wroteHeader {
+							rw.WriteHeader(grw.code)
 						}
 						// We have to reset response to it's pristine state when
 						// nothing is written to body or error is returned.
@@ -185,13 +190,15 @@ func (w *gzipResponseWriter) Flush() {
 	}
 
 	w.Writer.(*gzip.Writer).Flush()
-	if flusher, ok := w.ResponseWriter.(http.Flusher); ok {
-		flusher.Flush()
-	}
+	_ = http.NewResponseController(w.ResponseWriter).Flush()
+}
+
+func (w *gzipResponseWriter) Unwrap() http.ResponseWriter {
+	return w.ResponseWriter
 }
 
 func (w *gzipResponseWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
-	return w.ResponseWriter.(http.Hijacker).Hijack()
+	return http.NewResponseController(w.ResponseWriter).Hijack()
 }
 
 func (w *gzipResponseWriter) Push(target string, opts *http.PushOptions) error {
